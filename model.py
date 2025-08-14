@@ -115,7 +115,29 @@ def apply_rotary_embeddings(
     return x_out.type_as(x).to(device)
 
 
+class RMSNorm(nn.Module): 
+    """
+    Layer normalization 
+    
+    proposed that recentering dont contribute much, but instead rescaling 
 
+    hence find a statistic that is independent of the mean ==> RMS statistic instead 
+    """
+    def __init__(self, dim: int, eps: float = 1e-6): 
+        super().__init__()
+        self.eps = eps 
+        self.weight = nn.Parameter(torch.ones(dim)) # gamma param 
+
+    def _norm(self, x: torch.Tensor): 
+        # (B, seq_len, dim) * (B, seq_len, 1) = (B, seq_len, dim)
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+    
+    def forward(self, x: torch.Tensor): 
+        # (dim) * (b, seq_len, dim) = (b, seq_len, dim)
+        # gamma * ai_hat
+        return self.weight * self._norm(x.float().type_as(x))
+
+    
 class Transformer(nn.Module): 
 
     def __init__(self, args: ModelArgs) -> None: 
@@ -143,7 +165,8 @@ class Transformer(nn.Module):
 
         # frequency of rotational embeddings 
         self.freqs_complex = precompute_theta_pos_frequencies(
-            self.args.dim // self.args.n_heads, self.args.max_seq_len * 2, \
+            self.args.dim // self.args.n_heads, 
+            self.args.max_seq_len * 2, 
             device=self.args.device
         )
 
