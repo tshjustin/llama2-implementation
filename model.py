@@ -32,6 +32,63 @@ class ModelArgs:
     device: str = None 
 
 
+def precompute_theta_pos_frequencies(
+    head_dim: int,
+    seq_len: int, 
+    device: str, 
+    theta: float = 10000.0      
+):
+    """
+    RoPE is the middle ground between absolute and relative embeddings
+
+    1. Key idea is that we want to encode positional information when we perform attention calc
+
+    2. Each token would get rotated in space, by some angle theta, that follows a formla = 1 / 10000^(2i/d), i=index, d=dimension
+    
+    3. The rotation formula can be derived via the following: 
+        a. Each pair of value in the embedding is rotated by the 2D rotation matrix 
+        b. Expanding and simplifying gives a concise formula that we can follow --> x_rotated = (x1 x2 ...).(cosmθ1 cosmθ1 cosmθ2 cosmθ2...) + (-x2 x1 ...).(sinmθ1 sinmθ1 sinmθ2 ...)
+    """
+    assert head_dim % 2 == 0, "Embedding must be even --> 512, 1024..." 
+
+    # theta calculation  
+    # shape = (head_dim / 2)
+    theta_numerator = torch.arange(0, head_dim, 2).float()
+    theta = 1.0 / (theta ** (theta_numerator / head_dim)).to(device)
+
+    # now we can build the cos and sim matrics, finding all m and theta, which is all the position of 
+    # all the tokens in the sentence --> make use of the sequence length 
+
+    # shape = (seq_len)
+    m = torch.arange(seq_len, device=device)
+
+    # multiply with the theta to get mθ --> m_tensor * theta_tensor --> find x_rotated 
+    # Outer --> for each element of the first tensor, multiply with each element of the second tensor 
+    """
+    freqs[0][0] = m[0] × theta[0] = 0 × 1.0 = 0.0
+    freqs[0][1] = m[0] × theta[1] = 0 × 0.5 = 0.0
+    freqs[1][0] = m[1] × theta[0] = 1 × 1.0 = 1.0
+    freqs[1][1] = m[1] × theta[1] = 1 × 0.5 = 0.5
+    ...
+
+    freqs = [
+    [0.0, 0.0],    # position 0
+    [1.0, 0.5],    # position 1  
+    [2.0, 1.0]     # position 2
+    ]    
+
+    For this case of dim = 512 ==> [m×θ₀, m×θ₁, ..., m×θ₂₅₅] # position m
+
+    also obviously, the shape has became a "2d" in the toy example 
+
+    ==> shape = (seq_len, head_dim / 2)
+    """
+    freqs = torch.outer(m, theta).float()
+    
+    # compute compelx num in polars form c = R * exp(1 * m * theta), R = 1
+    freqs_complex = torch.polar(torch.ones_like(freqs), freqs)
+    return freqs_complex
+
 class Transformer(nn.Module): 
 
     def __init__(self, args: ModelArgs) -> None: 
