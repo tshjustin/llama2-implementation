@@ -627,6 +627,253 @@ def eager_attention_forward(
 class LlamaAttention(nn.Module):
     """
 
+    Dimensions of heads 
+    -----------------------
+
+    Query
+    ======
+    If we have 32 number of heads, then we would have 32 query heads 
+
+    For a dimension size of 4096, each query head would thus have (4096 / 32) dimension size 
+
+    Key Value 
+    ==========
+    Note that we preserve the same number of dimension as per the query heads => (4096 / 32)
+
+    But instead of the 32 heads, each having (4096 / 32) dimensions 
+
+    We have n_kv_head heads, each having (4096 / 32) dimensions ==> Much lesser number of parameters 
+
+    Example
+    ================
+
+    Token 0: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+    Token 1: [2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]
+
+    1. Query Projection (8 → 8 dimensions)
+    Token 0 Q: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
+    Token 1 Q: [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+
+    2. Key Projection (8 → 4 dimensions) --> Since we only have 2 KV heads here --> Lesser heads to represent the SAME NUMBER OF DIMENSIONS ==> Lead to overall reduction in parameter count 
+    Token 0 K: [0.2, 0.4, 0.6, 0.8]
+    Token 1 K: [0.4, 0.6, 0.8, 1.0]
+
+    3. Value Projection (8 → 4 dimensions)
+    Token 0 V: [0.3, 0.6, 0.9, 1.2] 
+    Token 1 V: [0.6, 0.9, 1.2, 1.5]
+    
+    4. Split to query Heads (1, 2, 8) → (1, 4, 2, 2)
+    Query Head 0: Token 0: [0.1, 0.2]    Token 1: [0.2, 0.3]
+    Query Head 1: Token 0: [0.3, 0.4]    Token 1: [0.4, 0.5] 
+    Query Head 2: Token 0: [0.5, 0.6]    Token 1: [0.6, 0.7]
+    Query Head 3: Token 0: [0.7, 0.8]    Token 1: [0.8, 0.9]
+
+
+    5. Split to KV heads 
+    Key States: (1, 2, 4) → (1, 2, 2, 2)
+    # Key 
+    KV Head 0: Token 0: [0.2, 0.4]    Token 1: [0.4, 0.6]
+    KV Head 1: Token 0: [0.6, 0.8]    Token 1: [0.8, 1.0]
+
+    # Values 
+    KV Head 0: Token 0: [0.3, 0.6]    Token 1: [0.6, 0.9]
+    KV Head 1: Token 0: [0.9, 1.2]    Token 1: [1.2, 1.5]
+
+    6. Repeat KV heads, for both value and key  
+    Key Head 0: Token 0: [0.2, 0.4]    Token 1: [0.4, 0.6]  ← Copy of KV Head 0
+    Key Head 1: Token 0: [0.2, 0.4]    Token 1: [0.4, 0.6]  ← Copy of KV Head 0  
+    Key Head 2: Token 0: [0.6, 0.8]    Token 1: [0.8, 1.0]  ← Copy of KV Head 1
+    Key Head 3: Token 0: [0.6, 0.8]    Token 1: [0.8, 1.0]  ← Copy of KV Head 1
+
+    7. Attention QK^T --> Similar to MHA 
+    Q_head0 = [[0.1, 0.2], [0.2, 0.3]]  # 2 tokens × 2 dims
+    K_head0 = [[0.2, 0.4], [0.4, 0.6]]  # 2 tokens × 2 dims
+
+    Q × K^T = [[0.1, 0.2], [0.2, 0.3]] × [[0.2, 0.4], [0.4, 0.6]]^T
+            = [[0.1, 0.2], [0.2, 0.3]] × [[0.2, 0.4], [0.4, 0.6]]
+
+    8. Apply casual mask
+    Masked scores = [[0.071, -inf], 
+                    [0.113, 0.184]]
+
+    9. Soft max and multiply with V 
+
+    10. Concate all the heads -> (1, 2, 8)
+    Token 0 output: [0.3, 0.6, 0.3, 0.6, 0.9, 1.2, 0.9, 1.2]
+    Token 1 output: [0.455, 0.755, 0.455, 0.755, 1.365, 1.755, 1.365, 1.755]
+
+    11. Final output projection 
+    Token 0: [0.15, 0.3, 0.15, 0.3, 0.45, 0.6, 0.45, 0.6]
+    Token 1: [0.228, 0.378, 0.228, 0.378, 0.683, 0.878, 0.683, 0.878]
+
+    ==========
+    KV Cache 
+    ==========
+
+    past_key_values = None  # No cache yet
+    hidden_states = "The" embedding: (1, 1, 8)
+
+    Forward Pass 1: 
+    --------------------
+    key_states = self.k_proj(hidden_states)    # (1, 1, 4)
+    value_states = self.v_proj(hidden_states)  # (1, 1, 4)
+
+    # Reshape to heads  
+    key_states = key_states.view(1, 1, 2, 2).transpose(1, 2)    # (1, 2, 1, 2)
+    value_states = value_states.view(1, 1, 2, 2).transpose(1, 2) # (1, 2, 1, 2)
+
+    Key states shape: (1, 2, 1, 2)
+    KV Head 0: Token "The": [0.2, 0.4]
+    KV Head 1: Token "The": [0.6, 0.8]
+
+    Value states shape: (1, 2, 1, 2)  
+    KV Head 0: Token "The": [0.3, 0.6]
+    KV Head 1: Token "The": [0.9, 1.2]
+
+    Apply RoPE
+    cos, sin = position_embeddings  # Position 0 for "The"
+    query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+
+    After RoPE
+    Key states:
+    KV Head 0: Token "The": [0.21, 0.39]
+    KV Head 1: Token "The": [0.61, 0.79]
+
+    Since no cache at first --> after the first attention calculation --> would create the cache 
+    past_key_values.update(key_states, value_states, layer_idx=0, cache_kwargs)
+
+    past_key_values[layer_0]:
+    keys:   (1, 2, 1, 2) - 2 KV heads, 1 token, 2 dims per head
+    values: (1, 2, 1, 2)
+    
+    KV Head 0: Key=[0.21, 0.39], Value=[0.3, 0.6]  # Token "The"
+    KV Head 1: Key=[0.61, 0.79], Value=[0.9, 1.2]  # Token "The"
+
+
+    Forward Pass 2
+    -----------------------
+    past_key_values = <contains "The" data>  # Cache exists now
+    hidden_states = "cat" embedding: (1, 1, 8)  # Only new token 
+
+    # Linear projections for "cat" only --> Note that previously without KV cache we would have calculate the same for "Cat"
+    key_states = self.k_proj(hidden_states)    # (1, 1, 4)
+    value_states = self.v_proj(hidden_states)  # (1, 1, 4)
+
+    # Reshape to heads
+    key_states = key_states.view(1, 1, 2, 2).transpose(1, 2)    # (1, 2, 1, 2)
+    value_states = value_states.view(1, 1, 2, 2).transpose(1, 2) # (1, 2, 1, 2)
+
+    ... same operations ... 
+
+    NOTE: Now would save the KV embeddings for CAT 
+    if past_key_values is not None: 
+        cache_kwargs = {"sin": sin, "cos": cos, "cache_position": torch.tensor([1])}
+        key_states, value_states = past_key_values.update(
+            key_states,      # New keys for "cat": (1, 2, 1, 2)
+            value_states,    # New values for "cat": (1, 2, 1, 2)  
+            self.layer_idx,  # layer_idx = 0
+            cache_kwargs
+        )
+
+    past_key_values[layer_0]:
+        keys:   (1, 2, 2, 2) - 2 KV heads, 2 tokens, 2 dims per head
+        values: (1, 2, 2, 2)
+
+    ...
+
+    Layer 0 Key Cache:
+    [
+        batch_0: [
+            head_0: [[k₁₁, k₁₂, k₁₃, k₁₄], [k₂₁, k₂₂, k₂₃, k₂₄], [k₃₁, k₃₂, k₃₃, k₃₄]], ==> stores the sharded matrics 
+            head_1: [[k₁₁, k₁₂, k₁₃, k₁₄], [k₂₁, k₂₂, k₂₃, k₂₄], [k₃₁, k₃₂, k₃₃, k₃₄]],
+            head_2: [[k₁₁, k₁₂, k₁₃, k₁₄], [k₂₁, k₂₂, k₂₃, k₂₄], [k₃₁, k₃₂, k₃₃, k₃₄]],
+            head_3: [[k₁₁, k₁₂, k₁₃, k₁₄], [k₂₁, k₂₂, k₂₃, k₂₄], [k₃₁, k₃₂, k₃₃, k₃₄]]
+        ]
+    ]
+
+
+    ==============================
+    How the actual cache looks like
+    ==============================
+    Consider the cases only after RoPE 
+
+    rotated_keys = [
+        head_0: [0.42, -0.18, 0.75, 0.15, ..., 0.68],   # Slightly modified by RoPE
+        head_1: [0.31, -0.48, 0.88, -0.08, ..., 0.18]
+    ] 
+
+    DynamicCache {
+        key_cache: [
+            # Layer 0 keys
+            tensor([[[[ 0.42, -0.18,  0.75,  0.15, ...,  0.68],    # head 0, token 1 ------------> In this example, there are 3 layrs. These layers are applied sequenially, one token at a time 
+                    [ 0.31, -0.48,  0.88, -0.08, ...,  0.18]]]]), # head 1, token 1  ------------> the proper fill order is Layer 0 --> layer 0 + layer 1 --> layer 0 + layer 1 + layer 2 
+            
+            # Layer 1 keys  
+            tensor([[[[ 0.73, -0.21,  0.45,  0.67, ...,  0.12],    # head 0, token 1
+                    [ 0.89, -0.34,  0.56, -0.23, ...,  0.91]]]]), # head 1, token 1
+                    
+            # Layer 2 keys
+            tensor([[[[ 0.34, -0.67,  0.78,  0.23, ...,  0.45],    # head 0, token 1  
+                    [ 0.12, -0.89,  0.34,  0.67, ...,  0.78]]]])  # head 1, token 1
+        ],
+        
+        value_cache: [
+            # Layer 0 values (similar structure to keys but different values)
+            tensor([[[[ 0.78, -0.23,  0.45,  0.67, ...,  0.12],
+                    [ 0.34, -0.67,  0.78,  0.23, ...,  0.45]]]]),
+            # Layer 1 values
+            tensor([[[[ 0.56, -0.78,  0.34,  0.12, ...,  0.89],
+                    [ 0.67, -0.23,  0.45,  0.78, ...,  0.34]]]]),
+            # Layer 2 values  
+            tensor([[[[ 0.89, -0.34,  0.56,  0.67, ...,  0.23],
+                    [ 0.45, -0.78,  0.12,  0.89, ...,  0.56]]]])
+        ],
+        
+        _seen_tokens: 1
+    }
+
+    ## Now for the next word
+
+    new_key_states = [
+        head_0: [0.67, -0.34, 0.12, 0.89, ..., 0.23],   # 32 dims for token 2
+        head_1: [0.45, -0.78, 0.56, -0.23, ..., 0.67]   # 32 dims for token 2  
+    ]
+    
+
+    DynamicCache {
+        key_cache: [
+            # Layer 0 keys - NOW WITH 2 TOKENS
+            tensor([[[[ 0.42, -0.18,  0.75,  0.15, ...,  0.68],    # head 0, token 1
+                    [ 0.67, -0.34,  0.12,  0.89, ...,  0.23]],   # head 0, token 2
+                    [[ 0.31, -0.48,  0.88, -0.08, ...,  0.18],    # head 1, token 1  
+                    [ 0.45, -0.78,  0.56, -0.23, ...,  0.67]]]]), # head 1, token 2
+            
+            # Layer 1 keys - ALSO WITH 2 TOKENS
+            tensor([[[[ 0.73, -0.21,  0.45,  0.67, ...,  0.12],    # head 0, token 1
+                    [ 0.23, -0.56,  0.78,  0.34, ...,  0.89]],   # head 0, token 2
+                    [[ 0.89, -0.34,  0.56, -0.23, ...,  0.91],    # head 1, token 1
+                    [ 0.12, -0.67,  0.34,  0.78, ...,  0.45]]]]), # head 1, token 2
+                    
+            # Layer 2 keys - ALSO WITH 2 TOKENS  
+            tensor([[[[ 0.34, -0.67,  0.78,  0.23, ...,  0.45],    # head 0, token 1
+                    [ 0.89, -0.12,  0.56,  0.67, ...,  0.34]],   # head 0, token 2
+                    [[ 0.12, -0.89,  0.34,  0.67, ...,  0.78],    # head 1, token 1
+                    [ 0.78, -0.23,  0.45,  0.89, ...,  0.12]]]])  # head 1, token 2
+        ],
+        
+        value_cache: [
+            # Similar structure - each layer now has 2 tokens worth of values
+            # Shape for each: [1, 2, 2, 32]
+            ...
+        ],
+        
+        _seen_tokens: 2
+    }
+
+    Now when we calculate attention --> 
+    1. Query --> Takes from all heads , but only the most recent token 
+
+    2. Key --> Takes from all heads, for all the tokens 
 
 
     """
@@ -752,7 +999,7 @@ class LlamaDecoderLayer(GradientCheckpointingLayer):
         )
         hidden_states = residual + hidden_states
 
-        # Fully Connected
+        # Fully Connected --> just go through the blocks 
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
         hidden_states = self.mlp(hidden_states)
@@ -782,11 +1029,7 @@ class LlamaPreTrainedModel(PreTrainedModel):
 @auto_docstring
 class LlamaModel(LlamaPreTrainedModel):
     """
-    
-    
-    
-    
-    
+    Base model wihtout any heads for any task   
     """
     def __init__(self, config: LlamaConfig):
         super().__init__(config)
@@ -867,6 +1110,10 @@ class LlamaModel(LlamaPreTrainedModel):
 
 @auto_docstring
 class LlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
+    """
+    Language modelling head 
+    
+    """
     _tied_weights_keys = ["lm_head.weight"]
     _tp_plan = {"lm_head": "colwise_rep"}
     _pp_plan = {"lm_head": (["hidden_states"], ["logits"])}
