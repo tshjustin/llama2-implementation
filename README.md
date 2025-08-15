@@ -4,7 +4,7 @@
 ![alt text](assets/image.png)
 
 
-#### Inference Stratgey 
+#### Inference Strategy 
 
 1. Greedy: Takes the next token with the highest P(.), but may not achieve global optimality, since future tokens could be bad after this selection 
 
@@ -19,3 +19,14 @@
 
 
 5. Top P sampling. Sort the tokens based on probability, then take the tokens such that this token's cumulative sum of probability = P. Hence we would limit the token that are rubbish, but may still be present. 
+
+
+#### Temperature 
+
+1. Deals with the scaling of logits 
+
+
+2. Low temperature = Small logits becomes smaller, large logits become larger, difference between P(.) is larger = more confident 
+
+
+3. More confident = more deterministic 
