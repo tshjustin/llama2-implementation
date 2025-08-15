@@ -248,6 +248,48 @@ class SelfAttention(nn.Module):
                 [[...], [...]],
                 [[...], [...]]
             ]
+
+        Use of the KV-Cache 
+
+        Consider the autoregressive style, and we have already generated "Cat Sat" 
+
+        Without KV_cache 
+        -----------------
+        all_embeddings = embeddings("Cat Sat")
+
+        all_k = all_embeddings @ Wk
+        all_v = all_embeddings @ Wv 
+
+        attention --> generates "on" 
+
+        # now for the next word 
+        all_embeddings = embeddings("Cat Sat on")
+
+        all_k = all_embeddings @ Wk 
+        all_v = all_embeddings @ Wv 
+
+        # Notice that we recalculate the Key and Value vector again for "Cat Sat' --> Cache them instead 
+
+        With KV_Cache 
+        ---------------        
+        all_embeddings = embeddings("Cat Sat")
+
+        all_k = all_embeddings @ Wk
+        all_v = all_embeddings @ Wv 
+
+        store_cache(all_k, all_v)
+
+        attention --> generates "on" 
+
+        # now for the next word 
+        all_embeddings = embeddings("Cat Sat on")
+
+        get_embeddings([:n-1])
+
+        all_k = embedding("on") @ Wk 
+        all_v = embedding("on") @ Wv 
+        ...
+
         """
         self.cache_k = torch.zeros((args.max_batch_size, args.max_seq_len, self.n_kv_heads, self.head_dim))
         self.cache_v = torch.zeros((args.max_batch_size, args.max_seq_len, self.n_kv_heads, self.head_dim))
@@ -276,22 +318,85 @@ class SelfAttention(nn.Module):
 
         # KV - Cache 
         # Replace the entry in the cache for this token 
+        """
+        This operation have to deal with how the cache looks like and how we store in the information 
+
+        cache_k = [
+            # Batch size = 1 --> Since inference 
+            [
+                # Position 0: "The" 
+                [[k_head0_dims], [k_head1_dims]],
+                
+                # Position 1: "cat"
+                [[k_head0_dims], [k_head1_dims]], 
+                
+                # Position 2: "sat" 
+                [[k_head0_dims], [k_head1_dims]],
+                
+                # Position 3: empty (zeros)
+                [[0, 0, 0, ...], [0, 0, 0, ...]],
+                
+                # Position 4-9: empty (zeros)
+                [[0, 0, 0, ...], [0, 0, 0, ...]],
+            ]
+        ]
+
+        cache_k[:batch_size, start_pos:start_pos+seq_len]
+        
+        a. Takes the first batch (1 in this case since inferece)
+
+        b. From this batch size, take the K_head embeddings from start_pos:seq_len, where the range typically is the length of the generated sequence 
+        """
+
+        # Update cache 
         self.cache_k[:batch_size, start_pos:start_pos+seq_len] = xk
         self.cache_v[:batch_size, start_pos:start_pos+seq_len] = xv
         
         # Retrieve all the cached keys and values so far 
         # (B, seq_len_kv, head_kv, head_dim)
+        # Retrieve cache 
+        keys = self.cache_k[:batch_size, 0:start_pos+seq_len]
+        values = self.cache_v[:batch_size, 0:start_pos+seq_len]
+
+        # Repeat the heads of the K and V to reach the number of the queries 
         """
         Since number of heads of key and values != query heads 
 
         We need to account for this in the calculation 
         
         1. Copy the single k/v head into multiple heads into a MHA architecture 
-        """
-        keys = self.cache_k[:batch_size, 0:start_pos+seq_len]
-        values = self.cache_v[:batch_size, 0:start_pos+seq_len]
 
-        # Repeat the heads of the K and V to reach the number of the queries 
+        # This is also known as a 2KV Head, lol even though V is misleading here 
+        keys = [
+            [
+                # Position 0: "The"
+                [k_head0, k_head1],
+
+                # Position 1: "cat" 
+                [k_head0, k_head1],
+
+                # Position 2: "sat"
+                [k_head0, k_head1]
+            ]
+        ]
+
+        # To make it the KV head work with the Query heads, multiply the KV heads 
+
+        # After repeat_kv(keys, n_rep=4) - 8 KV heads:
+        keys = [
+            [
+                # Position 0: "The"
+                [k_head0, k_head0, k_head0, k_head0, k_head1, k_head1, k_head1, k_head1], --> note that its repeated, saves parameter counts on K/V 
+
+                # Position 1: "cat"
+                [k_head0, k_head0, k_head0, k_head0, k_head1, k_head1, k_head1, k_head1], 
+
+                # Position 2: "sat"
+                [k_head0, k_head0, k_head0, k_head0, k_head1, k_head1, k_head1, k_head1]
+            ]
+        ]
+        """
+
         keys = repeat_kv(keys, self.n_rep)
         values = repeat_kv(values, self.n_rep)
 
