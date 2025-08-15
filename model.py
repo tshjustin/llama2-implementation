@@ -151,6 +151,41 @@ class RMSNorm(nn.Module):
         # gamma * ai_hat
         return self.weight * self._norm(x.float().type_as(x))
 
+class FeedForward(nn.Module):
+    def __init__(
+        self,
+        args: ModelArgs
+    ):
+        super().__init__()
+
+        hidden_dim = 4 * args.dim
+        hidden_dim = int(2 * hidden_dim / 3)
+
+        if args.ffn_dim_multiplier is not None:
+            hidden_dim = int(args.ffn_dim_multiplier * hidden_dim)
+
+        # Round the hidden_dim to the nearest multiple of the multiple_of parameter
+        hidden_dim = args.multiple_of * ((hidden_dim + args.multiple_of - 1) // args.multiple_of)
+
+        self.w1 = nn.Linear(args.dim, hidden_dim, bias=False)
+        self.w2 = nn.Linear(hidden_dim, args.dim, bias=False)
+        self.w3 = nn.Linear(args.dim, hidden_dim, bias=False)
+
+    def forward(self, x: torch.Tensor):
+        """
+        swish allows for smooth negatives , allowing for better information flows 
+        
+        """
+        # (B, Seq_Len, Dim) --> (B, Seq_Len, Hidden_Dim) --> linear transforation + swish activation -> (1, 1, 512) -> (1, 1, 1408) --> Since w1 and 3 works sequentially, must compenstate for the increase so 2/3 multiply 
+        swish = F.silu(self.w1(x))
+        # (B, Seq_Len, Dim) --> (B, Seq_Len, Hidden_Dim) --> linear transformation + no activation -> (1, 1, 512) -> (1, 1, 1408)
+        x_V = self.w3(x)
+        # (B, Seq_Len, Hidden_Dim) * (B, Seq_Len, Hidden_Dim) --> (B, Seq_Len, Hidden_Dim) --> SwiGLU = multiply them together (the "gating") --> (1, 1, 1408) * (1, 1, 1408) -> (1, 1, 1408)
+        x = swish * x_V
+        # (B, Seq_Len, Hidden_Dim) --> (B, Seq_Len, Dim) --> project back to orignal size --> (1, 1, 1408) -> (1, 1, 512)
+        x = self.w2(x)
+        return x
+
 
 class EncoderBlock(nn.Module):
 
