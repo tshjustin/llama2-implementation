@@ -1,25 +1,3 @@
-# coding=utf-8
-# Copyright 2022 EleutherAI and the HuggingFace Inc. team. All rights reserved.
-#
-# This code is based on EleutherAI's GPT-NeoX library and the GPT-NeoX
-# and OPT implementations in this library. It has been modified from its
-# original forms to accommodate minor architectural differences compared
-# to GPT-NeoX and OPT used by the Meta AI team that trained the model.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-"""Tokenization classes for LLaMA."""
-
 import os
 from shutil import copyfile
 from typing import TYPE_CHECKING, Any, Optional
@@ -39,10 +17,10 @@ logger = logging.get_logger(__name__)
 
 VOCAB_FILES_NAMES = {"vocab_file": "tokenizer.model"}
 
-SPIECE_UNDERLINE = "▁"
+SPIECE_UNDERLINE = "▁" # sentence piece uses this for sspaces 
 
-B_INST, E_INST = "[INST]", "[/INST]"
-B_SYS, E_SYS = "<<SYS>>\n", "\n<</SYS>>\n\n"
+B_INST, E_INST = "[INST]", "[/INST]" # instruction markers 
+B_SYS, E_SYS = "<<SYS>>\n", "\n<</SYS>>\n\n" # system prompt markers 
 
 DEFAULT_SYSTEM_PROMPT = """You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe. Your \
 answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure\
@@ -125,7 +103,7 @@ class LlamaTokenizer(PreTrainedTokenizer):
             Whether or not to add an initial space to the input. This allows to treat the leading word just as any
             other word. Again, this should be set with `from_slow=True` to make sure it's taken into account.
     """
-
+    # class attributes 
     vocab_files_names = VOCAB_FILES_NAMES
     model_input_names = ["input_ids", "attention_mask"]
 
@@ -137,6 +115,8 @@ class LlamaTokenizer(PreTrainedTokenizer):
         eos_token="</s>",
         pad_token=None,
         sp_model_kwargs: Optional[dict[str, Any]] = None,
+
+        # behaviours to add in SOS / EOS tokens 
         add_bos_token=True,
         add_eos_token=False,
         clean_up_tokenization_spaces=False,
@@ -146,7 +126,11 @@ class LlamaTokenizer(PreTrainedTokenizer):
         add_prefix_space=True,
         **kwargs,
     ):
+
         self.sp_model_kwargs = {} if sp_model_kwargs is None else sp_model_kwargs
+
+        # Convert special tokens strings to AddedTokens for internal usage 
+        # AddedToken is a special object 
         bos_token = AddedToken(bos_token, normalized=False, special=True) if isinstance(bos_token, str) else bos_token
         eos_token = AddedToken(eos_token, normalized=False, special=True) if isinstance(eos_token, str) else eos_token
         unk_token = AddedToken(unk_token, normalized=False, special=True) if isinstance(unk_token, str) else unk_token
@@ -231,11 +215,38 @@ class LlamaTokenizer(PreTrainedTokenizer):
         vocab.update(self.added_tokens_encoder)
         return vocab
 
+    """
+    tokenize: Preprocess
+
+    _toeknzier: tokenize
+
+
+    1. Normalize text with replcaement of _ to ""
+
+    2. Add prefixs _Hello_World 
+
+    3. calls _toeknizer
+
+
+    Step 1: Encode with UNK token prefix to handle the ▁ correctly
+    # This is a workaround because SP model strips leading ▁
+
+    tokens = self.sp_model.encode(self.unk_token + text, out_type=str)
+
+    # self.unk_token = "<unk>", so encoding "<unk>▁Hello world!"
+    # Result: ['<', 'unk', '>', '▁Hello', '▁world', '!']
+    
+    # Step 2: Remove the UNK token parts
+
+    # self.unk_token_length = 3 (for ['<', 'unk', '>'])
+    return tokens[self.unk_token_length:] if len(tokens) >= self.unk_token_length else tokens
+    # Return: ['▁Hello', '▁world', '!']
+    """
     # Copied from transformers.models.t5.tokenization_t5.T5Tokenizer.tokenize
     def tokenize(self, text: "TextInput", **kwargs) -> list[str]:
         """
-        Converts a string to a list of tokens. If `self.legacy` is set to `False`, a prefix token is added unless the
-        first token is special.
+        tokens = tokenizer.tokenize("Hello world!")
+        # Output: ['▁Hello', '▁world', '!']
         """
         if self.legacy or len(text) == 0:
             return super().tokenize(text, **kwargs)
@@ -253,13 +264,7 @@ class LlamaTokenizer(PreTrainedTokenizer):
     # Copied from transformers.models.t5.tokenization_t5.T5Tokenizer._tokenize
     def _tokenize(self, text, **kwargs):
         """
-        Returns a tokenized string.
-
-        We de-activated the `add_dummy_prefix` option, thus the sentencepiece internals will always strip any
-        SPIECE_UNDERLINE. For example: `self.sp_model.encode(f"{SPIECE_UNDERLINE}Hey", out_type = str)` will give
-        `['H', 'e', 'y']` instead of `['▁He', 'y']`. Thus we always encode `f"{unk_token}text"` and strip the
-        `unk_token`. Here is an example with `unk_token = "<unk>"` and `unk_token_length = 4`.
-        `self.tokenizer.sp_model.encode("<unk> Hey", out_type = str)[4:]`.
+        Internal method that performs the tokenziation  via sentencepiece 
         """
         if self.legacy or not text.startswith((SPIECE_UNDERLINE, " ")):
             return self.sp_model.encode(text, out_type=str)
@@ -270,17 +275,29 @@ class LlamaTokenizer(PreTrainedTokenizer):
         return tokens[self.unk_token_length :] if len(tokens) >= self.unk_token_length else tokens
 
     def _convert_token_to_id(self, token):
-        """Converts a token (str) in an id using the vocab."""
+        """
+
+        token_id = tokenizer._convert_token_to_id("▁Hello")
+        # Output: 15043
+        """
         return self.sp_model.piece_to_id(token)
 
     def _convert_id_to_token(self, index):
-        """Converts an index (integer) in a token (str) using the vocab."""
+        """
+        
+        Opposite of the above 
+        
+        """
         token = self.sp_model.IdToPiece(index)
         return token
 
     def convert_tokens_to_string(self, tokens):
-        """Converts a sequence of tokens (string) in a single string."""
-        # since we manually add the prefix space, we have to remove it when decoding
+        """
+        
+        Converts a sequence of tokens (string) in a single string.
+        
+        
+        """
         if tokens[0].startswith(SPIECE_UNDERLINE) and self.add_prefix_space:
             tokens[0] = tokens[0][1:]
 
@@ -331,6 +348,19 @@ class LlamaTokenizer(PreTrainedTokenizer):
         return (out_vocab_file,)
 
     def build_inputs_with_special_tokens(self, token_ids_0, token_ids_1=None):
+        """
+        Adds BOS/EOS tokens around sequences for model input
+        
+        # Single sequence
+        token_ids = [15043, 3186]  # [Hello, world]
+        input_ids = tokenizer.build_inputs_with_special_tokens(token_ids)
+        # Output: [1, 15043, 3186, 2]  # [BOS, Hello, world, EOS]
+
+        # Sequence pair
+        input_ids = tokenizer.build_inputs_with_special_tokens([15043], [3186])
+        # Output: [1, 15043, 2, 1, 3186, 2]  # [BOS, Hello, EOS, BOS, world, EOS]
+        
+        """
         bos_token_id = [self.bos_token_id] if self.add_bos_token else []
         eos_token_id = [self.eos_token_id] if self.add_eos_token else []
 
@@ -358,6 +388,13 @@ class LlamaTokenizer(PreTrainedTokenizer):
 
         Returns:
             `list[int]`: A list of integers in the range [0, 1]: 1 for a special token, 0 for a sequence token.
+
+
+        Creates a mask to denote which is a special toekn 
+
+        token_ids = [15043, 3186]
+        mask = tokenizer.get_special_tokens_mask(token_ids)
+        # Output: [1, 0, 0, 1]  # [BOS=special, Hello=normal, world=normal, EOS=special]
         """
         if already_has_special_tokens:
             return super().get_special_tokens_mask(

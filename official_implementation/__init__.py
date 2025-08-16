@@ -14,10 +14,21 @@
 from typing import TYPE_CHECKING
 
 from ...utils import _LazyModule
-from ...utils.import_utils import define_import_structure
+from ...utils.import_utils import define_import_structure # reads init file--> parses import statements --> builds mapping 
+
+"""
+
+{
+    "configuration_llama": ["LlamaConfig", "LlamaOnnxConfig", ...],
+    "modeling_llama": ["LlamaModel", "LlamaForCausalLM", ...],
+    "tokenization_llama": ["LlamaTokenizer", ...],
+    # etc.
+}
+
+"""
 
 
-if TYPE_CHECKING:
+if TYPE_CHECKING: # would know all the classes rather than the inside helper functions 
     from .configuration_llama import *
     from .modeling_flax_llama import *
     from .modeling_llama import *
@@ -27,4 +38,4 @@ else:
     import sys
 
     _file = globals()["__file__"]
-    sys.modules[__name__] = _LazyModule(__name__, _file, define_import_structure(_file), module_spec=__spec__)
+    sys.modules[__name__] = _LazyModule(__name__, _file, define_import_structure(_file), module_spec=__spec__) # lazy loading to when it actually requires them 
