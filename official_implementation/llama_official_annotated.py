@@ -724,7 +724,35 @@ def eager_attention_forward(
 
 
     """
-    
+    In this case , we calculate the attetnino per head, then later on we concatenate 
+
+    attn_output = [ (2, 8, 4, 64)
+    # Batch 0
+    [
+        [[h0_pos0_vals...], [h0_pos1_vals...], [h0_pos2_vals...], [h0_pos3_vals...]],  # Head 0
+        [[h1_pos0_vals...], [h1_pos1_vals...], [h1_pos2_vals...], [h1_pos3_vals...]],  # Head 1  
+        [[h2_pos0_vals...], [h2_pos1_vals...], [h2_pos2_vals...], [h2_pos3_vals...]],  # Head 2
+        [[h3_pos0_vals...], [h3_pos1_vals...], [h3_pos2_vals...], [h3_pos3_vals...]],  # Head 3
+        [[h4_pos0_vals...], [h4_pos1_vals...], [h4_pos2_vals...], [h4_pos3_vals...]],  # Head 4
+        [[h5_pos0_vals...], [h5_pos1_vals...], [h5_pos2_vals...], [h5_pos3_vals...]],  # Head 5
+        [[h6_pos0_vals...], [h6_pos1_vals...], [h6_pos2_vals...], [h6_pos3_vals...]],  # Head 6
+        [[h7_pos0_vals...], [h7_pos1_vals...], [h7_pos2_vals...], [h7_pos3_vals...]]   # Head 7
+    ],
+    # Batch 1
+    [...]
+
+    ## After transpose  (2, 4, 8, 64) --> swop positions 
+    attn_output = [
+    # Batch 0
+        [
+            [[h0_pos0_vals...], [h1_pos0_vals...], [h2_pos0_vals...], ..., [h7_pos0_vals...]],  # Position 0, all heads
+            [[h0_pos1_vals...], [h1_pos1_vals...], [h2_pos1_vals...], ..., [h7_pos1_vals...]],  # Position 1, all heads
+            [[h0_pos2_vals...], [h1_pos2_vals...], [h2_pos2_vals...], ..., [h7_pos2_vals...]],  # Position 2, all heads  
+            [[h0_pos3_vals...], [h1_pos3_vals...], [h2_pos3_vals...], ..., [h7_pos3_vals...]]   # Position 3, all heads
+        ],
+        # Batch 1
+        [...]
+    ]
     
     """
     attn_output = attn_output.transpose(1, 2).contiguous()
@@ -1062,6 +1090,45 @@ class LlamaAttention(nn.Module):
         )
 
         # flatten all the head together 
+        """
+        attn_output[0, 0, :, :] = 
+        [
+            [head0_64_values...],  # Head 0 output for position 0
+            [head1_64_values...],  # Head 1 output for position 0  
+            [head2_64_values...],  # Head 2 output for position 0
+            ...
+            [head7_64_values...]   # Head 7 output for position 0
+        ]
+            
+        
+        # Before: Separate heads
+        Position 0: [[H0], [H1], [H2], [H3], [H4], [H5], [H6], [H7]]
+        Position 1: [[H0], [H1], [H2], [H3], [H4], [H5], [H6], [H7]]
+        ...
+
+        # After: Concatenated heads  
+        Position 0: [H0|H1|H2|H3|H4|H5|H6|H7]  # 512-dim vector
+        Position 1: [H0|H1|H2|H3|H4|H5|H6|H7]  # 512-dim vector
+        ...
+        
+
+
+        ### Pytorch operations 
+
+        input_shape = (2, 4) ==>. unpack == 2, 4
+
+        .reshape(2, 4 , -1).contiguous()
+
+        # Before reshape: (batch, seq, heads, head_dim)
+        attn_output.shape = (2, 4, 8, 64)
+
+        # reshape(2, 4, -1) ==> keep the first 2 dimentsion ==> fix the last dimentison 
+        # The -1 means "calculate this dimension automatically"
+        # -1 = (8 * 64) = 512
+        attn_output.shape = (2, 4, 512)
+
+        .contiguous() ==> ensures that memory are sequnetially and not scattered 
+        """
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
 
         # final projection layer 
@@ -1083,19 +1150,26 @@ class LlamaDecoderLayer(GradientCheckpointingLayer):
     @deprecate_kwarg("past_key_value", new_name="past_key_values", version="4.58")
     def forward(
         self,
-        hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[Cache] = None,
+        hidden_states: torch.Tensor, #  main tensor flowing through the layer
+
+        attention_mask: Optional[torch.Tensor] = None, 
+
+        position_ids: Optional[torch.LongTensor] = None, # [0, 1, 2, 3, ...], there is batch size here 
+
+        past_key_values: Optional[Cache] = None, # kv cache 
+
         use_cache: Optional[bool] = False,
+        
         cache_position: Optional[torch.LongTensor] = None,
+
         position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,  # necessary, but kept here for BC
+
         **kwargs: Unpack[TransformersKwargs],
     ) -> torch.Tensor:
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
         # Self Attention
-        hidden_states, _ = self.self_attn(
+        hidden_states, _ = self.self_attn( # prviosuly layer embeddings   --> though in the image, there is an addition of RMS norm after initla embeddings --> but no additional embeddings after the first decoder output --> jsut decoder_layer_1 as inputs to the next layer 
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -1105,7 +1179,7 @@ class LlamaDecoderLayer(GradientCheckpointingLayer):
             position_embeddings=position_embeddings,
             **kwargs,
         )
-        hidden_states = residual + hidden_states
+        hidden_states = residual + hidden_states 
 
         # Fully Connected --> just go through the blocks 
         residual = hidden_states
