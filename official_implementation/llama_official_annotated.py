@@ -677,15 +677,56 @@ def eager_attention_forward(
     key_states = repeat_kv(key, module.num_key_value_groups)
     value_states = repeat_kv(value, module.num_key_value_groups)
 
-    attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
+    attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling # calculate attention scores 
 
     if attention_mask is not None:
-        causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
+        """
+        Applies an attetion mask that affects the top right triangle 
+
+        # Input sequence: "hi there i am"
+        input_ids = [15, 456, 23, 891]  # Token IDs
+        attention_mask = [1, 1, 1, 1]   # All real tokens (no padding) --> this is the very start, what we add to the model , that is different from the current attetnion_mask
+
+
+        # Attetnion mask would look something like the below  --> initiated with max_position_embeddings  , hence very long 
+
+        # Each "page" looks like a lower triangular matrix filled with 0.0 and -inf
+        attention_mask[0, 0, :, :] = [
+            [  0.0,  -inf,  -inf,  -inf, ..., -inf],  # Row 0
+            [  0.0,   0.0,  -inf,  -inf, ..., -inf],  # Row 1
+            [  0.0,   0.0,   0.0,  -inf, ..., -inf],  # Row 2
+            [  0.0,   0.0,   0.0,   0.0, ..., -inf],  # Row 3
+            ...
+            [  0.0,   0.0,   0.0,   0.0, ...,  0.0]   # Row 127
+        ]
+
+
+        # In this case --> causal_mask would look something like  --> slicing to the current sequence length 
+        causal_mask = [
+            [
+                [
+                    [  0.0,  -inf,  -inf,  -inf],
+                    [  0.0,   0.0,  -inf,  -inf], 
+                    [  0.0,   0.0,   0.0,  -inf],
+                    [  0.0,   0.0,   0.0,   0.0]
+                ]
+            ]
+        ] Shape: (1, 1, 4, 4)
+        
+        
+        """
+        causal_mask = attention_mask[:, :, :, : key_states.shape[-2]] # THis would do a trancuation --> attention_mask.shape = (1, 1, 2048, 2048)  --> attention_mask[:, :, :, :128]  # Take only first 128 columns
         attn_weights = attn_weights + causal_mask
 
     attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
     attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
     attn_output = torch.matmul(attn_weights, value_states)
+
+
+    """
+    
+    
+    """
     attn_output = attn_output.transpose(1, 2).contiguous()
 
     return attn_output, attn_weights
