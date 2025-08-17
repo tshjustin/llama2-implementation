@@ -1183,6 +1183,10 @@ class LlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
 
         loss = None
         if labels is not None:
+            """
+            This is for training --> for training of llama2
+            
+            """
             loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.vocab_size, **kwargs)
 
         return CausalLMOutputWithPast(
@@ -1194,6 +1198,12 @@ class LlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
         )
 
 
+"""
+For other tasks --> ... in a class means to inherit everything as is 
+
+For classification head --> can be found in GenericForSequenceClassification 
+
+"""
 class LlamaForSequenceClassification(GenericForSequenceClassification, LlamaPreTrainedModel): ...
 
 
