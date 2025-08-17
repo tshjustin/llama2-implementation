@@ -522,6 +522,19 @@ class LlamaMLP(nn.Module):
 
     same words used in different sentences gets different interpretation 
 
+    Input → Gate Projection → Activation (SiLU/Swish)  ──┐
+      │                                                  │
+      └──→ Up Projection ────────────────────────────────┘
+                                                        │
+                                                        ▼
+                                                Element-wise Product (*)
+                                                        │
+                                                        ▼
+                                                Down Projection
+                                                        │
+                                                        ▼
+                                                    Output
+
 
     """
     def __init__(self, config):
