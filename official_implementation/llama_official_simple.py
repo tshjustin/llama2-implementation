@@ -33,14 +33,25 @@ logger = logging.get_logger(__name__)
 @use_kernel_forward_from_hub("RMSNorm")
 class LlamaRMSNorm(nn.Module):
     def __init__(self, hidden_size, eps=1e-6):
-        """
-        LlamaRMSNorm is equivalent to T5LayerNorm
-        """
-        super().__init__()
-        self.weight = nn.Parameter(torch.ones(hidden_size))
-        self.variance_epsilon = eps
 
-    def forward(self, hidden_states):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(hidden_size)) # defines the gamma parameer for the RMS norm 
+        self.variance_epsilon = eps # to prevent small values 
+
+    def forward(self, hidden_states): 
+        """
+        Forward method is in charge of applying the RMS norm to 
+
+        1. input embeddings before its placed inside K V Q projections 
+
+        2. After the proejction and concatenation from the skip link 
+        
+        Recall that RMS norm is based on features of the a single token itself, rather than in a btach --> layer normalization 
+
+        Formula = square_root(mean(x^2) + epsilon)
+
+        1. Find the squared of the embeddings --> then find the mean of it, add with episolon and sqrt it
+        """
         input_dtype = hidden_states.dtype
         hidden_states = hidden_states.to(torch.float32)
         variance = hidden_states.pow(2).mean(-1, keepdim=True)
@@ -52,6 +63,12 @@ class LlamaRMSNorm(nn.Module):
 
 
 class LlamaRotaryEmbedding(nn.Module):
+    """
+    1. inv_freq is the radian "turn" that is based on the dimesnion of the embeddings --> d // 2, since we take in pairs 
+
+    2. Then we take in paris of embeddings and turn it, based on the sin and cos, then return RoPE embeddings --> Based on the HEAD Dimension 
+    """
+
     inv_freq: torch.Tensor  # fix linting for `register_buffer`
 
     def __init__(self, config: LlamaConfig, device=None):
@@ -61,19 +78,38 @@ class LlamaRotaryEmbedding(nn.Module):
             self.rope_type = config.rope_scaling.get("rope_type", config.rope_scaling.get("type"))
         else:
             self.rope_type = "default"
-        self.max_seq_len_cached = config.max_position_embeddings
-        self.original_max_seq_len = config.max_position_embeddings
+
+        
+        self.max_seq_len_cached = config.max_position_embeddings # current max length --> dynamic ROPE can change this 
+        self.original_max_seq_len = config.max_position_embeddings # original sequence length 
 
         self.config = config
-        self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
+        self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type] # typically is default  --> would return the fucntion to calculate the inversae array   
 
-        inv_freq, self.attention_scaling = self.rope_init_fn(self.config, device)
+        inv_freq, self.attention_scaling = self.rope_init_fn(self.config, device) # calculates the inverse array, and gives the attention sclaing 
+        """
+        inv_array, the dimesnion is dim_head // 2 , and can be precalculated depending on freq[i] = 1 / 10000&(2i/d)
+
+        example ==> inv_freq = [1.0000, 0.8913, 0.7943, 0.7080, 0.6310, ...]  # 32 frequencies for 64 dims
+        
+        attention scaling ==> applied to the cos and sin for stability 
+        """
         self.register_buffer("inv_freq", inv_freq, persistent=False)
         self.original_inv_freq = self.inv_freq
 
     @torch.no_grad()
     @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
     def forward(self, x, position_ids):
+        """
+        position_ids.shape[0] ==> batch size 
+
+        1. self.inv_freq[None, :, None] ==> add in 2 dimensions 
+
+        2. .expand(position_ids.shape[0], -1, 1) ==> ==> change only the first dimension, -1==> keep same
+
+        3. Since we are dealing with inv_freq ==> each different batch have the same inv_freq, hence would just a get a copy 
+        
+        """
         inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
         position_ids_expanded = position_ids[:, None, :].float()
 

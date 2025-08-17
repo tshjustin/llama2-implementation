@@ -334,7 +334,7 @@ class LlamaRotaryEmbedding(nn.Module):
         ]
 
 
-        # Duplicate along last dimension: (2, 3, 4) → (2, 3, 8)
+        # Duplicate along last dimension: (2, 3, 4) → (2, 3, 8) (cat) --> along some dimesnion --> last dimensioon in this case 
         emb = [
             [  # Batch 0
                 [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],           # Position 0
@@ -418,6 +418,60 @@ def rotate_half(x):
 
 
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
+    """
+
+    Consider 3 tokes
+
+    cos =   [ (shape: 3, 8)
+                [0.5403, 0.5403, 0.9950, 0.9950, 1.0000, 1.0000, 1.0000, 1.0000],
+                [0.5403, 0.5403, 0.9950, 0.9950, 1.0000, 1.0000, 1.0000, 1.0000],
+                [0.5403, 0.5403, 0.9950, 0.9950, 1.0000, 1.0000, 1.0000, 1.0000]
+            ]
+
+    sin =   [[0.8415, 0.8415, 0.0998, 0.0998, 0.0100, 0.0100, 0.0010, 0.0010],
+            [0.8415, 0.8415, 0.0998, 0.0998, 0.0100, 0.0100, 0.0010, 0.0010],
+            [0.8415, 0.8415, 0.0998, 0.0998, 0.0100, 0.0100, 0.0010, 0.0010]] 
+
+    ## unsqueeze 
+
+    cos_unsqueezed = [  (3, 1, 8)
+                        [
+                            [0.5403, 0.5403, 0.9950, 0.9950, 1.0000, 1.0000, 1.0000, 1.0000]
+                        ],
+                        [
+                            [0.5403, 0.5403, 0.9950, 0.9950, 1.0000, 1.0000, 1.0000, 1.0000]
+                        ],
+                        [
+                            [0.5403, 0.5403, 0.9950, 0.9950, 1.0000, 1.0000, 1.0000, 1.0000]
+                        ]
+                    ]
+
+    
+    
+    ## Assume that the q head looks like --> (2, 4, 3, 8)
+    q = [
+            [
+                [
+                    [q₀₀₀₀, q₀₀₀₁, q₀₀₀₂, q₀₀₀₃, q₀₀₀₄, q₀₀₀₅, q₀₀₀₆, q₀₀₀₇],    # batch 0, head 0, pos 0
+                    [q₀₀₁₀, q₀₀₁₁, q₀₀₁₂, q₀₀₁₃, q₀₀₁₄, q₀₀₁₅, q₀₀₁₆, q₀₀₁₇],    # batch 0, head 0, pos 1
+                    [q₀₀₂₀, q₀₀₂₁, q₀₀₂₂, q₀₀₂₃, q₀₀₂₄, q₀₀₂₅, q₀₀₂₆, q₀₀₂₇]     # batch 0, head 0, pos 2
+                ],   
+      
+                [
+                    [q₀₁₀₀, q₀₁₀₁, q₀₁₀₂, q₀₁₀₃, q₀₁₀₄, q₀₁₀₅, q₀₁₀₆, q₀₁₀₇],    # batch 0, head 1, pos 0
+                    [q₀₁₁₀, q₀₁₁₁, q₀₁₁₂, q₀₁₁₃, q₀₁₁₄, q₀₁₁₅, q₀₁₁₆, q₀₁₁₇],    # batch 0, head 1, pos 1
+                    [q₀₁₂₀, q₀₁₂₁, q₀₁₂₂, q₀₁₂₃, q₀₁₂₄, q₀₁₂₅, q₀₁₂₆, q₀₁₂₇]     # batch 0, head 1, pos 2
+                ]
+            ],  
+     ...]]
+    
+     Broadcasting from right to left 
+     q:   (2, 4, 3, 8)
+     cos: (   3, 1, 8)
+    
+    cos gets exapnded to match ==> cos broadcasted: (2, 4, 3, 8)
+    
+    """
     cos = cos.unsqueeze(unsqueeze_dim) # (2, 3, 8) → (2, 1, 3, 8) (for example) --> adds a dimenson at the specified dim 
     sin = sin.unsqueeze(unsqueeze_dim)
     q_embed = (q * cos) + (rotate_half(q) * sin)
